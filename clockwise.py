@@ -364,7 +364,8 @@ def create_c_wing_image(size=64, color='#E75B3C', bg_color=None):
     base_poly = get_c_wing_polygon()
     scaled_poly = [((x * super_size / 200.0), (y * super_size / 200.0)) for x, y in base_poly]
     draw.polygon(scaled_poly, fill=color)
-    return img.resize((size, size), Image.Resampling.LANCZOS)
+    resample_filter = getattr(getattr(Image, 'Resampling', Image), 'LANCZOS', getattr(Image, 'ANTIALIAS', 1))
+    return img.resize((size, size), resample_filter)
 
 # ── Window Automation Helpers ─────────────────────────────────────────────────
 def _enum_visible_windows():
