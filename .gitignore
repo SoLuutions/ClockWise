@@ -1,3 +1,5 @@
 build/
 ClockWise.spec
 __pycache__/
+certs/*.key
+certs/*.pfx

@@ -1,0 +1,39 @@
+# UTF-8
+# Version resource configuration for ClockWise
+# Author: Clark Lindley Suan (https://clarklindleysuan.com/)
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          '040904B0',
+          [
+            StringStruct('CompanyName', 'Clark Lindley Suan'),
+            StringStruct('FileDescription', 'ClockWise — Wise time automation by Clark Lindley Suan'),
+            StringStruct('FileVersion', '1.0.1.0'),
+            StringStruct('InternalName', 'ClockWise'),
+            StringStruct('LegalCopyright', 'Copyright (c) 2026 Clark Lindley Suan (https://clarklindleysuan.com/)'),
+            StringStruct('OriginalFilename', 'ClockWise.exe'),
+            StringStruct('ProductName', 'ClockWise'),
+            StringStruct('ProductVersion', '1.0.1.0'),
+            StringStruct('Author', 'Clark Lindley Suan'),
+            StringStruct('LegalTrademarks', 'ClockWise by Clark Lindley Suan'),
+            StringStruct('Comments', 'Developed by Clark Lindley Suan (https://clarklindleysuan.com/)')
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
