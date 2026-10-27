@@ -1,0 +1,17 @@
+# ==============================================================================
+# ClockWise - Dependencies for Windows
+# ==============================================================================
+# Install with: pip install -r requirements.txt
+
+# GUI & Graphics
+Pillow>=10.0.0
+
+# Windows System Tray & Global Hotkeys
+pystray>=0.19.5
+keyboard>=0.13.5
+
+# Automation & Mouse/Keyboard Control
+PyAutoGUI>=0.9.54
+
+# Optional: Environment variables support if using .env
+python-dotenv>=1.0.0

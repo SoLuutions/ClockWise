@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- ClockWise Logo: Letter C with two-feather wing top and angled cut bottom -->
+  <path d="M 172,42
+           C 135,36 68,58 42,106
+           C 24,142 42,182 86,188
+           C 116,192 146,186 170,170
+           L 155,148
+           C 136,160 116,164 96,162
+           C 68,158 58,134 62,112
+           C 68,88 92,72 122,72
+           C 138,72 154,78 168,88
+           C 156,76 148,68 152,62
+           C 158,54 166,48 172,42 Z"
+        fill="#E75B3C" />
+</svg>
