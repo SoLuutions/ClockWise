@@ -4,8 +4,8 @@
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 1, 0),
-    prodvers=(1, 0, 1, 0),
+    filevers=(1, 0, 2, 0),
+    prodvers=(1, 0, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -21,12 +21,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Clark Lindley Suan'),
             StringStruct('FileDescription', 'ClockWise — Wise time automation by Clark Lindley Suan'),
-            StringStruct('FileVersion', '1.0.1.0'),
+            StringStruct('FileVersion', '1.0.2.0'),
             StringStruct('InternalName', 'ClockWise'),
             StringStruct('LegalCopyright', 'Copyright (c) 2026 Clark Lindley Suan (https://clarklindleysuan.com/)'),
             StringStruct('OriginalFilename', 'ClockWise.exe'),
             StringStruct('ProductName', 'ClockWise'),
-            StringStruct('ProductVersion', '1.0.1.0'),
+            StringStruct('ProductVersion', '1.0.2.0'),
             StringStruct('Author', 'Clark Lindley Suan'),
             StringStruct('LegalTrademarks', 'ClockWise by Clark Lindley Suan'),
             StringStruct('Comments', 'Developed by Clark Lindley Suan (https://clarklindleysuan.com/)')

@@ -7,7 +7,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
 
-CURRENT_VERSION = "1.0.1"
+CURRENT_VERSION = "1.0.2"
 GITHUB_REPO = "SoLuutions/ClockWise"
 
 # ── App Data Directory (Persistent across PyInstaller temp executions) ────────

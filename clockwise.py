@@ -8,6 +8,8 @@ Features:
 - Supabase Server Authentication & 30-Day Subscription Payment Verifier
 - Restricts access if account is missing or last payment > 30 days
 - Full background automation engine (mouse curves, browser interaction, window slots)
+- Window switching via simulated Alt+Tab (default) or title-matched window slots
+- Activity Level duty cycle (e.g. 80% active / 20% natural idle pauses)
 - Global Hotkeys (F9 Start, F10 Stop, F11 Quit, Ctrl+Alt+1..5 Window Switcher)
 - System Tray with C-Wing icon and 'ClockWise' tooltip
 """
@@ -40,7 +42,7 @@ except ImportError:
     from datetime import timezone
 
     class EmbeddedAuthService:
-        CURRENT_VERSION = "1.0.1"
+        CURRENT_VERSION = "1.0.2"
         GITHUB_REPO = "SoLuutions/ClockWise"
 
         @classmethod
@@ -443,6 +445,8 @@ CURRENT_THEME = 'night'  # Default to Night (deep teal) or Day
 
 # ── Core Automation Config ───────────────────────────────────────────────────
 CFG = {
+    # Activity duty cycle (fraction of time active; rest is natural idle pauses)
+    'activity_level': 0.8,
     # Timing
     'tick_min': 1.0, 'tick_max': 4.0,
     # Mouse
@@ -459,6 +463,9 @@ CFG = {
     'search_interval_min': 15.0,  # minutes
     'chrome_tab_chance': 0.05,
     'auto_switch_chance': 0.08,
+    # Window switching: 'alt_tab' (default) or 'slots' (title-matched windows)
+    'switch_mode': 'alt_tab',
+    'alt_tab_max_depth': 2,       # max Tab presses while holding Alt
     # Break reminder
     'break_enabled': False,
     'break_interval': 45.0,       # minutes
@@ -467,6 +474,9 @@ CFG = {
     'stealth_mode': True,
     'randomize_patterns': True,
 }
+
+# Factory defaults snapshot (taken before persisted settings are applied)
+DEFAULT_CFG = dict(CFG)
 
 # ── State ─────────────────────────────────────────────────────────────────────
 running = False
@@ -479,6 +489,7 @@ _last_break = time()
 _last_search_time = 0.0
 searches_done = 0
 _used_queries = set()
+_idle_debt = 0.0                  # Accumulated idle time owed to honour activity_level
 
 # Window switcher
 NUM_SLOTS = 5
@@ -497,10 +508,24 @@ def init_persisted_settings():
                     window_slots[i]['title_fragment'] = frag
         if 'cfg' in settings and isinstance(settings['cfg'], dict):
             for k, v in settings['cfg'].items():
-                if k in CFG and type(v) == type(CFG[k]):
+                if k not in CFG:
+                    continue
+                d = CFG[k]
+                if isinstance(d, bool) or isinstance(v, bool):
+                    if type(v) == type(d):
+                        CFG[k] = v
+                elif isinstance(d, (int, float)) and isinstance(v, (int, float)):
+                    CFG[k] = type(d)(v)   # sliders may store int/float interchangeably
+                elif type(v) == type(d):
                     CFG[k] = v
     except Exception as e:
         print(f"[Settings init error] {e}")
+
+def persist_cfg():
+    try:
+        auth_service.save_settings({'cfg': dict(CFG)})
+    except Exception as e:
+        print(f"[Settings save error] {e}")
 
 # ── Font Helper (Inter with fallback to Segoe UI) ─────────────────────────────
 def get_font(weight='regular', size=13):
@@ -651,6 +676,42 @@ def switch_to_slot(idx):
         slot['hwnd'] = hwnd
         return _focus_hwnd(hwnd)
     return False
+
+def _do_alt_tab():
+    """Simulates a natural Alt+Tab (hold Alt, tap Tab 1..N times, release Alt)."""
+    if not IS_WINDOWS or not keyboard:
+        return False
+    max_depth = max(1, int(CFG.get('alt_tab_max_depth', 2)))
+    # Humans mostly flip to the previous window; deeper jumps are rarer
+    presses = 1 if (max_depth == 1 or random() < 0.6) else randint(2, max_depth)
+    try:
+        keyboard.press('alt')
+        sleep(uniform(0.05, 0.12))
+        for _ in range(presses):
+            keyboard.press_and_release('tab')
+            sleep(uniform(0.12, 0.3))
+    except Exception as e:
+        print(f"[Alt+Tab error] {e}")
+        return False
+    finally:
+        try: keyboard.release('alt')
+        except Exception: pass
+    return True
+
+def do_window_switch():
+    """Switches window using the configured mode (Alt+Tab default, slots optional)."""
+    if CFG.get('switch_mode') == 'slots':
+        active_slots = [i for i in range(NUM_SLOTS) if window_slots[i]['title_fragment'].strip()]
+        if active_slots and switch_to_slot(choice(active_slots)):
+            return True
+        return False
+    return _do_alt_tab()
+
+def _idle_pause(seconds):
+    """Interruptible idle (no input at all) so Stop/Quit stay responsive."""
+    end = time() + seconds
+    while running and not exit_program and time() < end:
+        sleep(0.2)
 
 def _register_window_hotkeys():
     global _win_hotkeys
@@ -872,7 +933,7 @@ def _press_arrow_keys():
 
 # ── Main Background Loop ──────────────────────────────────────────────────────
 def click_loop():
-    global exit_program, running
+    global exit_program, running, _idle_debt
     if not IS_WINDOWS or not pyautogui: return
     sw, sh = pyautogui.size()
     m = 100
@@ -884,6 +945,7 @@ def click_loop():
             sleep(0.2)
             continue
         try:
+            tick_start = time()
             _check_break()
             if CFG.get('randomize_patterns'):
                 t_min = CFG['tick_min'] + uniform(-0.2, 0.2)
@@ -915,19 +977,27 @@ def click_loop():
                     keyboard.press_and_release('ctrl+tab')
 
             if random() < CFG['auto_switch_chance']:
-                active_slots = [i for i in range(NUM_SLOTS) if window_slots[i]['title_fragment'].strip()]
-                if active_slots:
-                    switch_to_slot(choice(active_slots))
+                if do_window_switch():
                     sleep(uniform(2.0, 5.0))
 
             sleep(uniform(t_min, t_max))
+
+            # Activity duty cycle: for every second active, owe (1-a)/a seconds idle.
+            # Idle is paid back in natural-length pauses rather than every tick.
+            a = min(1.0, max(0.1, float(CFG.get('activity_level', 0.8))))
+            if a < 0.99:
+                _idle_debt += (time() - tick_start) * (1.0 - a) / a
+                if _idle_debt >= uniform(6.0, 25.0):
+                    pause = _idle_debt * uniform(0.85, 1.15)
+                    _idle_debt = 0.0
+                    _idle_pause(pause)
         except Exception as exc:
             print(f'[ClockWise worker] {exc}')
             sleep(1.0)
 
 # ── App Control (Start / Stop / Quit) ──────────────────────────────────────────
 def start(icon=None, item=None):
-    global running, searches_done, _last_break, _last_search_time, _used_queries
+    global running, searches_done, _last_break, _last_search_time, _used_queries, _idle_debt
     # Subscription Access Restriction Gate
     if not current_user:
         if main_window:
@@ -938,6 +1008,7 @@ def start(icon=None, item=None):
     _last_break = time()
     _last_search_time = 0.0
     _used_queries = set()
+    _idle_debt = 0.0
     _rebuild_tray_menu()
 
 def stop(icon=None, item=None):
@@ -1171,6 +1242,14 @@ def show_main_window():
                  bg=t['panel'], fg=t['secondary_text']).grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 6))
         return card
 
+    # Debounced auto-save of CFG to settings.json
+    _save_job = [None]
+    def schedule_save():
+        if _save_job[0]:
+            try: root.after_cancel(_save_job[0])
+            except Exception: pass
+        _save_job[0] = root.after(600, persist_cfg)
+
     # Helper: Slider row with grid layout
     def slider_row(card, row_idx, label, key, lo, hi, fmt='{:.1f} s', is_int=False):
         tk.Label(card, text=label, font=get_font('regular', 11), bg=t['panel'],
@@ -1186,6 +1265,7 @@ def show_main_window():
             if is_int: val = int(round(val))
             CFG[key] = val
             val_lbl.config(text=fmt.format(val))
+            schedule_save()
 
         scale = ttk.Scale(card, from_=lo, to=hi, orient='horizontal',
                           variable=var, command=on_slide, style='TScale')
@@ -1196,11 +1276,20 @@ def show_main_window():
         tk.Label(card, text=label, font=get_font('regular', 11), bg=t['panel'],
                  fg=t['text']).grid(row=row_idx, column=0, sticky='w', padx=(0, 10), pady=4)
         var = tk.BooleanVar(value=CFG[key])
-        def on_toggle(): CFG[key] = var.get()
+        def on_toggle():
+            CFG[key] = var.get()
+            schedule_save()
         chk = tk.Checkbutton(card, variable=var, command=on_toggle, bg=t['panel'],
                              selectcolor=t['window'], activebackground=t['panel'],
                              relief='flat', highlightthickness=0)
         chk.grid(row=row_idx, column=2, sticky='e', pady=4)
+
+    # 0. ACTIVITY LEVEL PANEL
+    p0 = create_panel(content, 'Activity Level')
+    slider_row(p0, 1, 'Active time (rest = natural idle)', 'activity_level', 0.3, 1.0, '{:.0%}')
+    tk.Label(p0, text='80% means ~8 of every 10 minutes active, with realistic idle pauses in between.',
+             font=get_font('regular', 9), bg=t['panel'], fg=t['secondary_text'],
+             wraplength=460, justify='left').grid(row=2, column=0, columnspan=3, sticky='w', pady=(0, 2))
 
     # 1. TICK INTERVAL PANEL
     p1 = create_panel(content, 'Tick Interval')
@@ -1243,10 +1332,49 @@ def show_main_window():
     p6 = create_panel(content, 'Stealth & Anti-Detection')
     toggle_row(p6, 1, 'Stealth mode (natural hesitations)', 'stealth_mode')
     toggle_row(p6, 2, 'Randomize tick patterns', 'randomize_patterns')
-    slider_row(p6, 3, 'Auto window-switch chance', 'auto_switch_chance', 0, 0.5, '{:.0%}')
 
-    # 7. WINDOW SWITCHER SLOTS PANEL
-    p7 = create_panel(content, 'Window Switcher (Ctrl+Alt+1 … 5)')
+    # 7. WINDOW SWITCHING PANEL (Alt+Tab default, slots optional)
+    pws = create_panel(content, 'Window Switching')
+    tk.Label(pws, text='Method', font=get_font('regular', 11), bg=t['panel'],
+             fg=t['text']).grid(row=1, column=0, sticky='w', padx=(0, 10), pady=4)
+    mode_var = tk.StringVar(value=CFG.get('switch_mode', 'alt_tab'))
+    mode_wrap = tk.Frame(pws, bg=t['panel'])
+    mode_wrap.grid(row=1, column=1, columnspan=2, sticky='w', pady=4)
+
+    def on_mode_change():
+        CFG['switch_mode'] = mode_var.get()
+        schedule_save()
+
+    for val, txt in (('alt_tab', 'Alt+Tab (default)'), ('slots', 'Window Slots')):
+        tk.Radiobutton(mode_wrap, text=txt, value=val, variable=mode_var, command=on_mode_change,
+                       indicatoron=0, font=get_font('semibold', 9), padx=12, pady=3,
+                       bg=t['panel'], fg=t['secondary_text'],
+                       selectcolor=t['button_bg'], activebackground=t['panel'],
+                       relief='flat', offrelief='flat', borderwidth=0,
+                       highlightthickness=1, highlightbackground=t['hairline'],
+                       cursor='hand2').pack(side='left', padx=(0, 6))
+    # Keep selected segment text readable on the inverted background
+    def _style_segments(*_):
+        for w in mode_wrap.winfo_children():
+            sel = (w.cget('value') == mode_var.get())
+            w.config(fg=t['button_fg'] if sel else t['secondary_text'])
+    mode_var.trace_add('write', _style_segments)
+    _style_segments()
+
+    slider_row(pws, 2, 'Switch chance per tick', 'auto_switch_chance', 0, 0.5, '{:.0%}')
+    slider_row(pws, 3, 'Alt+Tab max depth', 'alt_tab_max_depth', 1, 4, '{:.0f} tab', is_int=True)
+
+    def _test_switch():
+        # Short delay so the click on this button finishes first
+        root.after(800, do_window_switch)
+    tk.Button(pws, text='Test Switch Now', command=_test_switch,
+              bg=t['panel'], fg=t['secondary_text'], relief='flat',
+              font=get_font('semibold', 9), padx=10, pady=3,
+              highlightthickness=1, highlightbackground=t['hairline'],
+              cursor='hand2').grid(row=4, column=0, sticky='w', pady=(6, 2))
+
+    # 8. WINDOW SWITCHER SLOTS PANEL
+    p7 = create_panel(content, 'Window Slots (optional · Ctrl+Alt+1 … 5)')
     p7.columnconfigure(1, weight=1)
     slot_vars = []
     status_lbls = []
@@ -1317,6 +1445,26 @@ def show_main_window():
                          highlightthickness=1, highlightbackground=t['hairline'], cursor='hand2')
     scan_btn.grid(row=NUM_SLOTS + 1, column=0, sticky='w', pady=(6, 2))
     root.after(400, scan_all_slots)
+
+    # 9. DEFAULTS PANEL
+    pdef = create_panel(content, 'Defaults')
+    tk.Label(pdef, text='Changes are saved automatically and become your new defaults.',
+             font=get_font('regular', 9), bg=t['panel'], fg=t['secondary_text'],
+             wraplength=460, justify='left').grid(row=1, column=0, columnspan=3, sticky='w')
+
+    def reset_defaults():
+        if not messagebox.askyesno('Reset Settings', 'Restore all automation settings to factory defaults?'):
+            return
+        CFG.update(DEFAULT_CFG)
+        persist_cfg()
+        root.destroy()
+        show_main_window()
+
+    tk.Button(pdef, text='Reset to Factory Defaults', command=reset_defaults,
+              bg=t['panel'], fg=t['accent'], relief='flat',
+              font=get_font('semibold', 9), padx=10, pady=3,
+              highlightthickness=1, highlightbackground=t['hairline'],
+              cursor='hand2').grid(row=2, column=0, sticky='w', pady=(6, 2))
 
     def update_live_ui():
         if running:
