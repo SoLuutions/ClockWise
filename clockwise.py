@@ -40,7 +40,7 @@ except ImportError:
     from datetime import timezone
 
     class EmbeddedAuthService:
-        CURRENT_VERSION = "1.0.0"
+        CURRENT_VERSION = "1.0.1"
         GITHUB_REPO = "SoLuutions/ClockWise"
 
         @classmethod
@@ -1339,47 +1339,7 @@ def show_main_window():
     root.protocol("WM_DELETE_WINDOW", lambda: root.withdraw()) # Minimize to tray on close
     root.mainloop()
 
-# ── Supabase Configuration Modal ──────────────────────────────────────────────
-def show_config_modal(parent):
-    t = THEME[CURRENT_THEME]
-    cfg = auth_service.load_config()
 
-    dlg = tk.Toplevel(parent)
-    dlg.title('Supabase Server Settings')
-    dlg.configure(bg=t['window'])
-    dlg.transient(parent)
-    dlg.grab_set()
-
-    tk.Label(dlg, text='SUPABASE DATABASE CONNECTION', font=get_font('bold', 10),
-             bg=t['window'], fg=t['secondary_text']).pack(anchor='w', padx=20, pady=(16, 8))
-
-    tk.Label(dlg, text='Project URL:', font=get_font('medium', 10),
-             bg=t['window'], fg=t['text']).pack(anchor='w', padx=20)
-    url_entry = tk.Entry(dlg, width=45, font=get_font('regular', 10),
-                         bg=t['panel'], fg=t['text'], highlightthickness=1,
-                         highlightbackground=t['hairline'], relief='flat')
-    url_entry.insert(0, cfg.get('supabase_url', ''))
-    url_entry.pack(padx=20, pady=(2, 10))
-
-    tk.Label(dlg, text='Anon / Public Key:', font=get_font('medium', 10),
-             bg=t['window'], fg=t['text']).pack(anchor='w', padx=20)
-    key_entry = tk.Entry(dlg, width=45, font=get_font('regular', 10),
-                         bg=t['panel'], fg=t['text'], highlightthickness=1,
-                         highlightbackground=t['hairline'], relief='flat')
-    key_entry.insert(0, cfg.get('supabase_anon_key', ''))
-    key_entry.pack(padx=20, pady=(2, 16))
-
-    def on_save():
-        u = url_entry.get().strip()
-        k = key_entry.get().strip()
-        auth_service.save_config(u, k)
-        messagebox.showinfo('Config Saved', 'Supabase credentials saved successfully.')
-        dlg.destroy()
-
-    save_btn = tk.Button(dlg, text='Save Connection', command=on_save,
-                         bg=t['button_bg'], fg=t['button_fg'], relief='flat',
-                         font=get_font('semibold', 10), padx=16, pady=6, cursor='hand2')
-    save_btn.pack(pady=(0, 16))
 
 # ── Login & Subscription Verification Window ──────────────────────────────────
 def show_login_window(update_notice=None):
@@ -1482,20 +1442,15 @@ def show_login_window(update_notice=None):
         email_entry.insert(0, cached.get('email', ''))
         pass_entry.insert(0, cached.get('password', ''))
 
-    # Footer links (Config DB connection + Theme toggle)
+    # Footer (Theme toggle)
     footer = tk.Frame(root, bg=t['window'], padx=28, pady=8)
     footer.pack(fill='x', side='bottom')
-
-    cfg_btn = tk.Button(footer, text='⚙ Database Settings', command=lambda: show_config_modal(root),
-                        bg=t['window'], fg=t['secondary_text'], relief='flat',
-                        font=get_font('regular', 9), cursor='hand2')
-    cfg_btn.pack(side='left')
 
     theme_toggle = tk.Button(footer, text=f"Theme: {t['name']}",
                              command=lambda: [root.destroy(), toggle_theme(), show_login_window()],
                              bg=t['window'], fg=t['secondary_text'], relief='flat',
                              font=get_font('regular', 9), cursor='hand2')
-    theme_toggle.pack(side='right')
+    theme_toggle.pack(anchor='center')
 
     # Center window
     root.update_idletasks()
