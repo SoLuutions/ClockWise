@@ -40,22 +40,71 @@ except ImportError:
     from datetime import timezone
 
     class EmbeddedAuthService:
-        CONFIG_FILE = os.path.join(SCRIPT_DIR, 'supabase_config.json')
-        SESSION_FILE = os.path.join(SCRIPT_DIR, 'session.json')
+        CURRENT_VERSION = "1.0.0"
+        GITHUB_REPO = "SoLuutions/ClockWise"
+
+        @classmethod
+        def get_app_data_dir(cls):
+            if sys.platform == 'win32':
+                base = os.environ.get('APPDATA') or os.path.expanduser('~')
+            else:
+                base = os.path.expanduser('~/.config')
+            app_dir = os.path.join(base, 'ClockWise')
+            os.makedirs(app_dir, exist_ok=True)
+            return app_dir
+
+        @classmethod
+        def get_config_file(cls):
+            return os.path.join(cls.get_app_data_dir(), 'supabase_config.json')
+
+        @classmethod
+        def get_session_file(cls):
+            return os.path.join(cls.get_app_data_dir(), 'session.json')
+
+        @classmethod
+        def get_settings_file(cls):
+            return os.path.join(cls.get_app_data_dir(), 'settings.json')
+
         DEFAULT_CONFIG = {
-            "supabase_url": "https://YOUR_PROJECT_REF.supabase.co",
-            "supabase_anon_key": "YOUR_SUPABASE_ANON_KEY",
+            "supabase_url": "https://xlcbhhrmibkaeyalsflk.supabase.co",
+            "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhsY2JoaHJtaWJrYWV5YWxzZmxrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNjk4ODksImV4cCI6MjEwODY0NTg4OX0.FQzWER765hCO61idza84f8bRTJlG_u59UNTXw9v7USU",
             "subscription_max_days": 30
         }
 
         @classmethod
-        def load_config(cls):
-            if os.path.exists(cls.CONFIG_FILE):
+        def load_settings(cls):
+            s_file = cls.get_settings_file()
+            if os.path.exists(s_file):
                 try:
-                    with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    with open(s_file, 'r', encoding='utf-8') as f:
                         return json.load(f)
                 except Exception:
                     pass
+            return {}
+
+        @classmethod
+        def save_settings(cls, data):
+            s_file = cls.get_settings_file()
+            try:
+                cur = cls.load_settings()
+                cur.update(data)
+                with open(s_file, 'w', encoding='utf-8') as f:
+                    json.dump(cur, f, indent=4)
+            except Exception:
+                pass
+
+        @classmethod
+        def load_config(cls):
+            local_cfg = os.path.join(SCRIPT_DIR, 'supabase_config.json')
+            for path in (local_cfg, cls.get_config_file()):
+                if os.path.exists(path):
+                    try:
+                        with open(path, 'r', encoding='utf-8') as f:
+                            cfg = json.load(f)
+                            if cfg.get('supabase_url') and 'YOUR_PROJECT_REF' not in cfg.get('supabase_url'):
+                                return cfg
+                    except Exception:
+                        pass
             return cls.DEFAULT_CONFIG.copy()
 
         @classmethod
@@ -65,13 +114,46 @@ except ImportError:
                 "supabase_anon_key": key.strip(),
                 "subscription_max_days": max_days
             }
-            with open(cls.CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(cfg, f, indent=4)
+            try:
+                with open(cls.get_config_file(), 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, indent=4)
+            except Exception:
+                pass
             return cfg
 
         @classmethod
         def _hash_password(cls, raw_pass):
             return hashlib.sha256(raw_pass.encode('utf-8')).hexdigest()
+
+        @classmethod
+        def parse_semver(cls, ver_str):
+            clean = str(ver_str).strip().lstrip('v').split('-')[0]
+            parts = []
+            for p in clean.split('.'):
+                try: parts.append(int(p))
+                except ValueError: parts.append(0)
+            while len(parts) < 3:
+                parts.append(0)
+            return tuple(parts[:3])
+
+        @classmethod
+        def check_for_updates(cls, timeout=4):
+            url = f"https://api.github.com/repos/{cls.GITHUB_REPO}/releases/latest"
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'ClockWise-Updater/1.0',
+                'Accept': 'application/vnd.github.v3+json'
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    tag = data.get('tag_name', '')
+                    latest_v = cls.parse_semver(tag)
+                    curr_v = cls.parse_semver(cls.CURRENT_VERSION)
+                    if latest_v > curr_v:
+                        return tag, True, data
+                    return tag, False, data
+            except Exception:
+                return None, False, None
 
         @classmethod
         def check_account_subscription(cls, email, password_input):
@@ -81,87 +163,123 @@ except ImportError:
             max_days = cfg.get("subscription_max_days", 30)
 
             if not base_url or 'YOUR_PROJECT_REF' in base_url or not anon_key or 'YOUR_SUPABASE_ANON_KEY' in anon_key:
-                return False, "Supabase connection is not configured yet. Please enter your Supabase URL & Anon Key in Database Settings.", None
+                return False, "Database connection not configured yet. Please enter your Supabase URL & Anon Key in Database Settings.", None
 
             clean_email = email.strip().lower()
             if not clean_email:
                 return False, "Email or username cannot be empty.", None
 
-            query_url = f"{base_url}/rest/v1/clockwise_users?email=eq.{urllib.parse.quote(clean_email)}&select=*"
-            req = urllib.request.Request(query_url, method='GET')
-            req.add_header('apikey', anon_key)
-            req.add_header('Authorization', f'Bearer {anon_key}')
-            req.add_header('Content-Type', 'application/json')
-            req.add_header('User-Agent', 'ClockWise-Windows/1.0')
-
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-            except urllib.error.HTTPError as e:
-                err_msg = e.read().decode('utf-8', errors='ignore')
-                return False, f"Server HTTP error ({e.code}): {err_msg or e.reason}", None
-            except urllib.error.URLError as e:
-                return False, f"Network error connecting to database: {e.reason}", None
-            except Exception as e:
-                return False, f"Unexpected error: {str(e)}", None
-
-            if not data or len(data) == 0:
-                return False, "Account not found. Please verify your email or sign up.", None
-
-            user = data[0]
-            db_pass = str(user.get('password', ''))
-            input_hashed = cls._hash_password(password_input)
-            if db_pass != password_input and db_pass != input_hashed:
-                return False, "Incorrect password. Please try again.", None
-
-            if not user.get('is_active', True):
-                return False, "Account has been deactivated. Please contact support.", None
-
-            raw_date = user.get('last_payment_date')
-            if not raw_date:
-                return False, "No payment record found for this account. Access restricted.", None
-
-            try:
-                date_str = str(raw_date).split('T')[0]
-                pay_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            except Exception:
-                return False, f"Invalid date format in database: {raw_date}", None
-
-            today = datetime.now(timezone.utc).date()
-            days_elapsed = (today - pay_date).days
-
-            if days_elapsed > max_days:
-                return False, (
-                    f"Subscription Expired: Last payment was on {pay_date.strftime('%b %d, %Y')} "
-                    f"({days_elapsed} days ago). Access is restricted until renewed."
-                ), user
-
-            days_remaining = max(0, max_days - max(0, days_elapsed))
-            success_msg = f"Subscription Active: {days_remaining} day{'s' if days_remaining != 1 else ''} remaining."
-            session_data = {
-                "email": clean_email,
-                "password": password_input,
-                "full_name": user.get('full_name', ''),
-                "last_payment_date": str(pay_date),
-                "days_remaining": days_remaining,
-                "verified_at": datetime.now(timezone.utc).isoformat()
+            headers = {
+                'apikey': anon_key,
+                'Authorization': f'Bearer {anon_key}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'ClockWise-Windows/1.0'
             }
-            cls.save_session(session_data)
-            return True, success_msg, session_data
+
+            # Method A: Secure Server-Side RPC Function
+            rpc_url = f"{base_url}/rest/v1/rpc/verify_subscription"
+            rpc_payload = json.dumps({"p_email": clean_email, "p_password": password_input}).encode('utf-8')
+            req_rpc = urllib.request.Request(rpc_url, data=rpc_payload, headers=headers, method='POST')
+
+            use_fallback = False
+            try:
+                with urllib.request.urlopen(req_rpc, timeout=8) as resp:
+                    res = json.loads(resp.read().decode('utf-8'))
+                    if isinstance(res, dict):
+                        if res.get('success'):
+                            days_left = res.get('days_remaining', 30)
+                            session_data = {
+                                "email": clean_email,
+                                "password": password_input,
+                                "full_name": res.get('full_name', ''),
+                                "last_payment_date": str(res.get('last_payment_date', '')),
+                                "days_remaining": days_left,
+                                "version": cls.CURRENT_VERSION,
+                                "verified_at": datetime.now(timezone.utc).isoformat()
+                            }
+                            cls.save_session(session_data)
+                            return True, res.get('message', f'Subscription Active: {days_left}d remaining'), session_data
+                        else:
+                            return False, res.get('message', 'Subscription expired or invalid.'), None
+            except urllib.error.HTTPError as e:
+                if e.code in (404, 400):
+                    use_fallback = True
+                else:
+                    err_body = e.read().decode('utf-8', errors='ignore')
+                    return False, f"Server Error ({e.code}): {err_body or e.reason}", None
+            except Exception:
+                use_fallback = True
+
+            # Method B: Fallback Direct REST Table Query
+            if use_fallback:
+                query_url = f"{base_url}/rest/v1/clockwise_users?email=eq.{urllib.parse.quote(clean_email)}&select=*"
+                req_table = urllib.request.Request(query_url, headers=headers, method='GET')
+                try:
+                    with urllib.request.urlopen(req_table, timeout=8) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                except Exception as e:
+                    return False, f"Database connection error: {str(e)}", None
+
+                if not data:
+                    return False, "Account not found. Please verify your email.", None
+
+                user = data[0]
+                db_pass = str(user.get('password', ''))
+                input_hashed = cls._hash_password(password_input)
+                if db_pass != password_input and db_pass != input_hashed:
+                    return False, "Incorrect password. Please try again.", None
+
+                if not user.get('is_active', True):
+                    return False, "Account has been deactivated. Please contact support.", None
+
+                raw_date = user.get('last_payment_date')
+                if not raw_date:
+                    return False, "No payment record found for this account. Access restricted.", None
+
+                try:
+                    date_str = str(raw_date).split('T')[0]
+                    pay_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                except Exception:
+                    return False, f"Invalid date format: {raw_date}", None
+
+                today = datetime.now(timezone.utc).date()
+                days_elapsed = (today - pay_date).days
+
+                if days_elapsed > max_days:
+                    return False, (
+                        f"Subscription Expired: Last payment was on {pay_date.strftime('%b %d, %Y')} "
+                        f"({days_elapsed} days ago - limit is 30 days). Access restricted."
+                    ), user
+
+                days_remaining = max(0, max_days - max(0, days_elapsed))
+                session_data = {
+                    "email": clean_email,
+                    "password": password_input,
+                    "full_name": user.get('full_name', ''),
+                    "last_payment_date": str(pay_date),
+                    "days_remaining": days_remaining,
+                    "version": cls.CURRENT_VERSION,
+                    "verified_at": datetime.now(timezone.utc).isoformat()
+                }
+                cls.save_session(session_data)
+                return True, f"Subscription Active: {days_remaining}d remaining", session_data
+
+            return False, "Unknown verification error.", None
 
         @classmethod
         def save_session(cls, session_data):
             try:
-                with open(cls.SESSION_FILE, 'w', encoding='utf-8') as f:
+                with open(cls.get_session_file(), 'w', encoding='utf-8') as f:
                     json.dump(session_data, f, indent=4)
             except Exception:
                 pass
 
         @classmethod
         def load_cached_session(cls):
-            if os.path.exists(cls.SESSION_FILE):
+            sess_file = cls.get_session_file()
+            if os.path.exists(sess_file):
                 try:
-                    with open(cls.SESSION_FILE, 'r', encoding='utf-8') as f:
+                    with open(sess_file, 'r', encoding='utf-8') as f:
                         return json.load(f)
                 except Exception:
                     pass
@@ -169,22 +287,48 @@ except ImportError:
 
         @classmethod
         def clear_session(cls):
-            if os.path.exists(cls.SESSION_FILE):
+            sess_file = cls.get_session_file()
+            if os.path.exists(sess_file):
                 try:
-                    os.remove(cls.SESSION_FILE)
+                    os.remove(sess_file)
                 except Exception:
                     pass
 
         @classmethod
-        def verify_cached_session(cls):
+        def verify_cached_session(cls, enforce_update_check=True):
             cached = cls.load_cached_session()
             if not cached:
-                return False, "No active session found.", None
+                return False, "No saved session found.", None
+
+            if enforce_update_check:
+                tag, has_update, _ = cls.check_for_updates(timeout=3)
+                if has_update and tag:
+                    cls.clear_session()
+                    return False, f"UPDATE_DETECTED:{tag}", {"update_tag": tag}
+
             email = cached.get('email', '')
             password = cached.get('password', '')
             if not email or not password:
                 return False, "Session incomplete.", None
-            return cls.check_account_subscription(email, password)
+
+            ok, msg, udata = cls.check_account_subscription(email, password)
+            if ok:
+                return True, msg, udata
+
+            # Offline grace check
+            if "expired" not in msg.lower() and "incorrect password" not in msg.lower() and "not found" not in msg.lower():
+                raw_date = cached.get('last_payment_date')
+                if raw_date:
+                    try:
+                        date_str = str(raw_date).split('T')[0]
+                        pay_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        days_elapsed = (datetime.now(timezone.utc).date() - pay_date).days
+                        if days_elapsed <= 30:
+                            cached['days_remaining'] = max(0, 30 - days_elapsed)
+                            return True, f"Subscription active: {cached['days_remaining']}d remaining", cached
+                    except Exception:
+                        pass
+            return False, msg, None
 
     auth_service = EmbeddedAuthService
 
@@ -203,6 +347,41 @@ if IS_WINDOWS:
             pass
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
+
+    # Configure 64-bit safe signatures for user32 and kernel32
+    try:
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [WNDENUMPROC, ctypes.wintypes.LPARAM]
+        user32.EnumWindows.restype = ctypes.wintypes.BOOL
+        user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
+        user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+        user32.GetWindowTextLengthW.argtypes = [ctypes.wintypes.HWND]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.IsWindow.restype = ctypes.wintypes.BOOL
+        user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
+        user32.IsIconic.restype = ctypes.wintypes.BOOL
+        user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = ctypes.wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+        user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
+        user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        user32.AttachThreadInput.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL]
+        user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
+        user32.SwitchToThisWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.BOOL]
+        user32.SwitchToThisWindow.restype = None
+        user32.keybd_event.argtypes = [ctypes.c_byte, ctypes.c_byte, ctypes.wintypes.DWORD, ctypes.c_void_p]
+        user32.keybd_event.restype = None
+    except Exception:
+        pass
+
     import pyautogui
     import keyboard
     import pystray
@@ -306,6 +485,23 @@ NUM_SLOTS = 5
 window_slots = [{'title_fragment': '', 'hwnd': None} for _ in range(NUM_SLOTS)]
 _win_hotkeys = []
 
+def init_persisted_settings():
+    global CURRENT_THEME
+    try:
+        settings = auth_service.load_settings()
+        if 'theme' in settings:
+            CURRENT_THEME = settings['theme']
+        if 'window_slots' in settings and isinstance(settings['window_slots'], list):
+            for i, frag in enumerate(settings['window_slots'][:NUM_SLOTS]):
+                if isinstance(frag, str):
+                    window_slots[i]['title_fragment'] = frag
+        if 'cfg' in settings and isinstance(settings['cfg'], dict):
+            for k, v in settings['cfg'].items():
+                if k in CFG and type(v) == type(CFG[k]):
+                    CFG[k] = v
+    except Exception as e:
+        print(f"[Settings init error] {e}")
+
 # ── Font Helper (Inter with fallback to Segoe UI) ─────────────────────────────
 def get_font(weight='regular', size=13):
     """Returns Inter if installed on Windows, else falls back to Segoe UI."""
@@ -372,42 +568,89 @@ def _enum_visible_windows():
     if not IS_WINDOWS or not user32:
         return []
     results = []
-    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.POINTER(ctypes.c_int))
+    # 64-bit compatible HWND and LPARAM types
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd):
             n = user32.GetWindowTextLengthW(hwnd)
             if n > 0:
                 b = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, b, n + 1)
-                results.append((hwnd, b.value))
+                title = b.value
+                if title and title not in ('Default IME', 'MSCTFIME UI'):
+                    results.append((hwnd, title))
         return True
-    user32.EnumWindows(cb, 0)
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
     return results
 
 def _find_hwnd(fragment):
-    if not fragment.strip() or not IS_WINDOWS:
+    if not fragment or not fragment.strip() or not IS_WINDOWS:
         return None
     fl = fragment.strip().lower()
+    # 1. Search for other application windows first (ignore ClockWise window itself)
+    for hwnd, title in _enum_visible_windows():
+        t_low = title.lower()
+        if 'clockwise' not in t_low and fl in t_low:
+            return hwnd
+    # 2. Fallback to any window containing the fragment
     for hwnd, title in _enum_visible_windows():
         if fl in title.lower():
             return hwnd
     return None
 
 def _focus_hwnd(hwnd):
-    if not IS_WINDOWS or not hwnd or not user32.IsWindow(hwnd):
+    if not IS_WINDOWS or not hwnd or not user32 or not user32.IsWindow(hwnd):
         return False
-    user32.ShowWindow(hwnd, 9)
-    user32.AllowSetForegroundWindow(0xFFFFFFFF)
-    user32.SetForegroundWindow(hwnd)
-    return True
+    try:
+        # 1. Un-minimize if minimized
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        else:
+            user32.ShowWindow(hwnd, 5)  # SW_SHOW
+
+        # 2. Windows Focus-Stealing Lock Bypass: Simulate Alt key tap to obtain foreground permission
+        try:
+            user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU (Alt) down
+            user32.keybd_event(0x12, 0, 2, 0)  # VK_MENU (Alt) up
+        except Exception:
+            pass
+
+        # 3. Attach thread input to bypass Windows Focus-Stealing restriction
+        cur_tid = kernel32.GetCurrentThreadId() if kernel32 else 0
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+
+        if fg_tid and cur_tid and fg_tid != cur_tid:
+            user32.AttachThreadInput(cur_tid, fg_tid, True)
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.AttachThreadInput(cur_tid, fg_tid, False)
+        else:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+
+        # 4. Use SwitchToThisWindow API
+        try:
+            user32.SwitchToThisWindow(hwnd, True)
+        except Exception:
+            pass
+
+        user32.SetActiveWindow(hwnd)
+        return True
+    except Exception as e:
+        print(f"[Focus window error] {e}")
+        return False
 
 def switch_to_slot(idx):
-    if idx < 0 or idx >= NUM_SLOTS: return
+    if idx < 0 or idx >= NUM_SLOTS: return False
     slot = window_slots[idx]
-    hwnd = _find_hwnd(slot['title_fragment'])
+    frag = slot.get('title_fragment', '').strip()
+    if not frag: return False
+    hwnd = _find_hwnd(frag)
     if hwnd:
         slot['hwnd'] = hwnd
-        _focus_hwnd(hwnd)
+        return _focus_hwnd(hwnd)
+    return False
 
 def _register_window_hotkeys():
     global _win_hotkeys
@@ -415,10 +658,13 @@ def _register_window_hotkeys():
     for hk in _win_hotkeys:
         try: keyboard.remove_hotkey(hk)
         except: pass
-    _win_hotkeys = [
-        keyboard.add_hotkey(f'ctrl+alt+{i+1}', lambda n=i: switch_to_slot(n), suppress=True)
-        for i in range(NUM_SLOTS)
-    ]
+    _win_hotkeys = []
+    for i in range(NUM_SLOTS):
+        try:
+            hk = keyboard.add_hotkey(f'ctrl+alt+{i+1}', lambda n=i: switch_to_slot(n), suppress=False)
+            _win_hotkeys.append(hk)
+        except Exception:
+            pass
 
 # ── Break Reminder Notification ───────────────────────────────────────────────
 def _show_break_popup():
@@ -818,7 +1064,7 @@ def show_main_window():
                           highlightthickness=1, highlightbackground=t['hairline'], cursor='hand2')
     theme_btn.pack(side='right', padx=(10, 0))
 
-    # User Subscription Pill
+    # User Subscription Pill & Log out
     if current_user:
         days_left = current_user.get('days_remaining', 30)
         user_email = current_user.get('email', 'User')
@@ -828,6 +1074,30 @@ def show_main_window():
                              highlightthickness=1, highlightbackground=t['hairline'],
                              padx=10, pady=3)
         user_pill.pack(side='right')
+
+        def _do_logout():
+            if messagebox.askyesno('Log Out', 'Are you sure you want to log out of ClockWise?'):
+                auth_service.clear_session()
+                root.destroy()
+                show_login_window()
+
+        logout_btn = tk.Button(header, text="Log out", command=_do_logout,
+                               bg=t['window'], fg=t['secondary_text'], relief='flat',
+                               font=get_font('regular', 8), cursor='hand2')
+        logout_btn.pack(side='right', padx=(0, 6))
+
+    # Background update checker for header
+    def _check_update_for_header():
+        tag, has_update, rdata = auth_service.check_for_updates(timeout=3)
+        if has_update and tag:
+            def _inject_pill():
+                update_btn = tk.Button(header, text=f"Update: {tag}",
+                                       command=lambda: show_update_modal(root, tag, rdata),
+                                       bg=t['accent'], fg='#FFFFFF', relief='flat',
+                                       font=get_font('bold', 9), padx=8, pady=2, cursor='hand2')
+                update_btn.pack(side='right', padx=(6, 0))
+            root.after(0, _inject_pill)
+    threading.Thread(target=_check_update_for_header, daemon=True).start()
 
     # ── 2. Live Status Sub-header ─────────────────────────────────────────────
     status_frame = tk.Frame(root, bg=t['window'], padx=20, pady=2)
@@ -898,7 +1168,7 @@ def show_main_window():
         card.columnconfigure(1, weight=1)
         # Eyebrow label (Inter 700 caps 11px)
         tk.Label(card, text=title.upper(), font=get_font('bold', 10),
-                 bg=t['panel'], fg=t['secondary_text']).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 6))
+                 bg=t['panel'], fg=t['secondary_text']).grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 6))
         return card
 
     # Helper: Slider row with grid layout
@@ -977,12 +1247,19 @@ def show_main_window():
 
     # 7. WINDOW SWITCHER SLOTS PANEL
     p7 = create_panel(content, 'Window Switcher (Ctrl+Alt+1 … 5)')
+    p7.columnconfigure(1, weight=1)
     slot_vars = []
     status_lbls = []
 
     def _refresh_slot(idx, sv, lbl):
         frag = sv.get().strip()
         window_slots[idx]['title_fragment'] = frag
+        # Persist slot settings to disk
+        try:
+            frags = [slot_vars[j].get().strip() for j in range(NUM_SLOTS)]
+            auth_service.save_settings({'window_slots': frags})
+        except Exception:
+            pass
         if not frag:
             lbl.config(text='—', fg=t['secondary_text'])
             return
@@ -992,7 +1269,7 @@ def show_main_window():
             n = user32.GetWindowTextLengthW(hwnd) if user32 else 0
             b = ctypes.create_unicode_buffer(n + 1) if user32 else None
             if user32: user32.GetWindowTextW(hwnd, b, n + 1)
-            txt = (b.value[:22] + '…') if b and len(b.value) > 22 else (b.value if b else 'Found')
+            txt = (b.value[:18] + '…') if b and len(b.value) > 18 else (b.value if b else 'Found')
             lbl.config(text=f'✔ {txt}', fg=t['text'])
         else:
             lbl.config(text='✘ Not found', fg=t['accent'])
@@ -1000,7 +1277,7 @@ def show_main_window():
     for i in range(NUM_SLOTS):
         r_idx = i + 1
         tk.Label(p7, text=f'Ctrl+Alt+{i+1}', font=get_font('semibold', 9),
-                 bg=t['panel'], fg=t['secondary_text'], width=12, anchor='w').grid(row=r_idx, column=0, sticky='w', pady=3)
+                 bg=t['panel'], fg=t['secondary_text'], width=11, anchor='w').grid(row=r_idx, column=0, sticky='w', pady=3)
         sv = tk.StringVar(value=window_slots[i]['title_fragment'])
         slot_vars.append(sv)
         entry = tk.Entry(p7, textvariable=sv, font=get_font('regular', 10),
@@ -1008,9 +1285,25 @@ def show_main_window():
                          highlightbackground=t['input_border'], relief='flat')
         entry.grid(row=r_idx, column=1, sticky='ew', padx=6, pady=3)
         lbl = tk.Label(p7, text='—', font=get_font('regular', 9), bg=t['panel'],
-                       fg=t['secondary_text'], anchor='e', width=16)
-        lbl.grid(row=r_idx, column=2, sticky='e', pady=3)
+                       fg=t['secondary_text'], anchor='w', width=16)
+        lbl.grid(row=r_idx, column=2, sticky='w', padx=(4, 6), pady=3)
         status_lbls.append(lbl)
+
+        # Immediate Test / Jump button
+        def _make_jump(slot_num, lb):
+            def _jump():
+                ok = switch_to_slot(slot_num)
+                if ok:
+                    lb.config(text='✔ Focused!', fg=t['text'])
+                else:
+                    lb.config(text='✘ Not found', fg=t['accent'])
+            return _jump
+        jump_btn = tk.Button(p7, text='Jump', command=_make_jump(i, lbl),
+                             bg=t['panel'], fg=t['text'], relief='flat',
+                             font=get_font('medium', 8), padx=6, pady=1,
+                             highlightthickness=1, highlightbackground=t['hairline'], cursor='hand2')
+        jump_btn.grid(row=r_idx, column=3, sticky='e', pady=3)
+
         sv.trace_add('write', lambda *_, idx=i, s=sv, lb=lbl: root.after(300, _refresh_slot, idx, s, lb))
 
     def scan_all_slots():
@@ -1089,7 +1382,7 @@ def show_config_modal(parent):
     save_btn.pack(pady=(0, 16))
 
 # ── Login & Subscription Verification Window ──────────────────────────────────
-def show_login_window():
+def show_login_window(update_notice=None):
     global login_window, current_user
     t = THEME[CURRENT_THEME]
 
@@ -1106,7 +1399,7 @@ def show_login_window():
         except Exception: pass
 
     # Header with large C-Wing logo
-    header = tk.Frame(root, bg=t['window'], pady=24)
+    header = tk.Frame(root, bg=t['window'], pady=20)
     header.pack(fill='x')
 
     logo_color = t['accent'] if CURRENT_THEME == 'night' else t['text']
@@ -1115,12 +1408,19 @@ def show_login_window():
     root._logo_tk = logo_tk
 
     logo_label = tk.Label(header, image=logo_tk, bg=t['window'])
-    logo_label.pack(pady=(0, 8))
+    logo_label.pack(pady=(0, 6))
 
     tk.Label(header, text='ClockWise', font=get_font('bold', 22),
              bg=t['window'], fg=t['text']).pack()
     tk.Label(header, text='Steady time, well spent.', font=get_font('regular', 11),
              bg=t['window'], fg=t['secondary_text']).pack(pady=(2, 0))
+
+    # Update Notice Banner (Shown only when update detected or subscription expired)
+    if update_notice:
+        banner = tk.Frame(root, bg=t['accent'], padx=14, pady=8)
+        banner.pack(fill='x', padx=28, pady=(0, 10))
+        tk.Label(banner, text=update_notice, font=get_font('semibold', 9),
+                 bg=t['accent'], fg='#FFFFFF', wraplength=340, justify='center').pack()
 
     # Login Card Panel
     card = tk.Frame(root, bg=t['panel'], highlightthickness=1,
@@ -1199,7 +1499,7 @@ def show_login_window():
 
     # Center window
     root.update_idletasks()
-    win_w, win_h = 420, 520
+    win_w, win_h = 420, 530
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     root.geometry(f'{win_w}x{win_h}+{(sw - win_w)//2}+{(sh - win_h)//2}')
     root.mainloop()
@@ -1207,13 +1507,20 @@ def show_login_window():
 # ── App Startup Verification ──────────────────────────────────────────────────
 def bootstrap():
     global current_user
-    # Attempt silent verification with cached session
-    ok, msg, udata = auth_service.verify_cached_session()
+    init_persisted_settings()
+    # Attempt silent verification with cached session (only log out if update detected)
+    ok, msg, udata = auth_service.verify_cached_session(enforce_update_check=True)
     if ok and udata:
         current_user = udata
         show_main_window()
     else:
-        show_login_window()
+        update_notice = None
+        if msg and msg.startswith("UPDATE_DETECTED:"):
+            tag = msg.split(":", 1)[1]
+            update_notice = f"⚡ New update {tag} detected!\nPlease update ClockWise to continue using the application."
+        elif "expired" in (msg or '').lower():
+            update_notice = msg
+        show_login_window(update_notice=update_notice)
 
 # ── Main Entrypoint ───────────────────────────────────────────────────────────
 def main():
